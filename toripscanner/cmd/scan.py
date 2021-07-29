@@ -5,6 +5,7 @@ import logging
 import os
 import re
 import socks  # type: ignore
+import socket
 import time
 from .. import tor_client as tor_client_builder
 from ..state_file import StateFile
@@ -108,7 +109,7 @@ def schedule_new_relays(
         state.write()
 
 
-def ip_from_resp(resp: str) -> Optional[str]:
+def host_from_resp(resp: str) -> Optional[str]:
     for line in resp.split('\n'):
         if not line.startswith('ERROR'):
             continue
@@ -121,13 +122,27 @@ def ip_from_resp(resp: str) -> Optional[str]:
     return None
 
 
+def ips_from_hostname(hostname: str) -> Iterable[str]:
+    out = set()
+    for ret in socket.getaddrinfo(hostname, None, proto=socket.IPPROTO_TCP):
+        _, _, _, _, sockaddr = ret
+        out.add(sockaddr[0])
+    return out
+
+
 def measure(
         tor: Controller, fp: str, dest: Tuple[str, int],
         good_relays: Iterable[str]) -> Iterable[str]:
     socks_addrport = get_socks_port(tor)
     assert socks_addrport
     ips: Set[str] = set()
-    # TODO: add IPs found in consensus/descriptor
+    descriptor = tor.get_server_descriptor(fp)
+    if not descriptor:
+        log.warning(f'No descriptor for {fp} so can\'t measure it.')
+        return ips
+    ips.add(descriptor.address)
+    for or_addr, _, _ in descriptor.or_addresses:
+        ips.add(or_addr)
     success, circid_or_err = build_gaps_circuit(
         [None, fp], tor, good_relays)
     if not success:
@@ -147,9 +162,9 @@ def measure(
         if not len(new):
             break
         resp += new
-    ip = ip_from_resp(resp)
-    if ip:
-        ips.add(ip)
+    host = host_from_resp(resp)
+    if host:
+        ips.update(ips_from_hostname(host))
     s.close()
     tor.remove_event_listener(listener)
     try:
@@ -200,6 +215,7 @@ def main(args, conf) -> None:
             TOR_CLIENT, conf.getpath('scan', 'good_relays'))
         ips = measure(TOR_CLIENT, relay_fp, dest, good_relays)
         if ips:
+            log.debug(ips)
             d = STATE_FILE.get(K_RELAY_FP_DONE)
             d[relay_fp] = time.time()
             STATE_FILE.set(K_RELAY_FP_DONE, d)
