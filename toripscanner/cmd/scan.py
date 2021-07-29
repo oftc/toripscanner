@@ -1,6 +1,6 @@
 from argparse import ArgumentParser
 from queue import Queue, Empty
-from typing import Tuple, Union, Iterable, Optional, Set
+from typing import Tuple, Union, Iterable, Optional, Set, Collection
 import logging
 import os
 import re
@@ -124,7 +124,7 @@ def host_from_resp(resp: str) -> Optional[str]:
     return None
 
 
-def ips_from_hostname(hostname: str) -> Iterable[str]:
+def ips_from_hostname(hostname: str) -> Collection[str]:
     out = set()
     for ret in socket.getaddrinfo(hostname, None, proto=socket.IPPROTO_TCP):
         _, _, _, _, sockaddr = ret
@@ -134,7 +134,7 @@ def ips_from_hostname(hostname: str) -> Iterable[str]:
 
 def measure(
         tor: Controller, fp: str, dest: Tuple[str, int],
-        good_relays: Iterable[str]) -> Iterable[str]:
+        good_relays: Iterable[str]) -> Collection[str]:
     socks_addrport = get_socks_port(tor)
     assert socks_addrport
     ips: Set[str] = set()
