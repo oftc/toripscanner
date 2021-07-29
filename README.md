@@ -20,4 +20,20 @@ outbound connections. Again, yes this is possible.
 
 - Tor
 - Stem
-- Python 3
+- Python 3.7
+
+## Install
+
+This will install Tor IP Scanner and its dependencies into a virtualenv
+suitable for development work.
+
+    $ cd to/this/directory
+    $ python3 -m venv venv
+    $ . venv/bin/activate
+    $ pip install -U pip
+    $ pip install -e .[dev]
+
+## Using
+
+Start the scanner with `toripscanner scan`. It runs in the foreground and stays
+running forever, periodically scanning new relays.
