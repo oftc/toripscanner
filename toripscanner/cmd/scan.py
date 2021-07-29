@@ -156,8 +156,21 @@ def measure(
     tor.add_event_listener(listener, 'STREAM')
     s = socks.socksocket()
     s.set_proxy(socks.SOCKS5, *socks_addrport)
-    s.connect(dest)
-    s.sendall(b'QUIT\n')
+    try:
+        s.connect(dest)
+        s.sendall(b'QUIT\n')
+    except Exception as e:
+        log.warning(e)
+        try:
+            s.close()
+        except Exception as e2:
+            log.warning(e2)
+        tor.remove_event_listener(listener)
+        try:
+            tor.close_circuit(circid)
+        except Exception as e2:
+            log.warning(e2)
+        return ips
     resp = ''
     while True:
         new = s.recv(4096).decode('utf-8')
