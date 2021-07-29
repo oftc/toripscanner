@@ -1,8 +1,10 @@
 from argparse import ArgumentParser
 from queue import Queue, Empty
-from typing import Tuple, Union, Iterable
+from typing import Tuple, Union, Iterable, Optional, Set
 import logging
 import os
+import re
+import socks  # type: ignore
 import time
 from .. import tor_client as tor_client_builder
 from ..state_file import StateFile
@@ -106,24 +108,55 @@ def schedule_new_relays(
         state.write()
 
 
-def measure(tor: Controller, fp: str, good_relays: Iterable[str]) -> bool:
+def ip_from_resp(resp: str) -> Optional[str]:
+    for line in resp.split('\n'):
+        if not line.startswith('ERROR'):
+            continue
+        match = re.match('ERROR :Closing Link: (.+) ()', line)
+        if not match:
+            continue
+        return match.group(1)
+    log.warning('Unable to find IP in the following response:')
+    log.warning(resp)
+    return None
+
+
+def measure(
+        tor: Controller, fp: str, dest: Tuple[str, int],
+        good_relays: Iterable[str]) -> Iterable[str]:
     socks_addrport = get_socks_port(tor)
     assert socks_addrport
+    ips: Set[str] = set()
+    # TODO: add IPs found in consensus/descriptor
     success, circid_or_err = build_gaps_circuit(
         [None, fp], tor, good_relays)
     if not success:
         log.warning(f'Unable to measure {fp} (1): {circid_or_err}')
-        return False
+        return ips
     circid = circid_or_err
     log.debug(f'Will measure {fp} on {circid} {circuit_str(tor, circid)}')
     listener = attach_stream_to_circuit_listener(tor, circid)
     tor.add_event_listener(listener, 'STREAM')
+    s = socks.socksocket()
+    s.set_proxy(socks.SOCKS5, *socks_addrport)
+    s.connect(dest)
+    s.sendall(b'QUIT\n')
+    resp = ''
+    while True:
+        new = s.recv(4096).decode('utf-8')
+        if not len(new):
+            break
+        resp += new
+    ip = ip_from_resp(resp)
+    if ip:
+        ips.add(ip)
+    s.close()
     tor.remove_event_listener(listener)
     try:
         tor.close_circuit(circid)
     except Exception as e:
         log.warning(e)
-    return True
+    return ips
 
 
 def main(args, conf) -> None:
@@ -165,7 +198,8 @@ def main(args, conf) -> None:
             f'{len(STATE_FILE.get(K_RELAY_FP_QUEUE))} relays remain')
         good_relays = get_good_relays(
             TOR_CLIENT, conf.getpath('scan', 'good_relays'))
-        if measure(TOR_CLIENT, relay_fp, good_relays):
+        ips = measure(TOR_CLIENT, relay_fp, dest, good_relays)
+        if ips:
             d = STATE_FILE.get(K_RELAY_FP_DONE)
             d[relay_fp] = time.time()
             STATE_FILE.set(K_RELAY_FP_DONE, d)
