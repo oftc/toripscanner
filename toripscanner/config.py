@@ -55,6 +55,19 @@ def config_logging(conf):
     ''' Called near the very beginning of execution to finish configuring
     Python's :mod:`logging`.
     '''
+    ###########################################################################
+    # Apply the user's actual desired path for test result output.
+    # It's weird because the logging config system wants a 4-tuple of args ...
+    # as a str.
+    # arg 1: the filename
+    fname = conf.getpath('scan', 'results_log')
+    # arg 2 and 3: the mode, the encoding
+    mode, encoding = 'a', None
+    # arg 4: whether to delay opening the file until first writing
+    delay = True
+    # now overwrite the config value
+    conf['handler_results']['args'] = str((fname, mode, encoding, delay))
+    ###########################################################################
     # Write out the conf we are storing in memory to a temporary file, as the
     # file-based configuration of the logging system requires a file with a
     # filename.

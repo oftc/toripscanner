@@ -8,6 +8,7 @@ import socks  # type: ignore
 import socket
 import time
 from .. import tor_client as tor_client_builder
+from ..results_logger import log_result
 from ..state_file import StateFile
 from ..test_utils import get_socks_port, build_gaps_circuit, get_good_relays,\
     circuit_str, attach_stream_to_circuit_listener
@@ -40,6 +41,7 @@ def initialize_directories(conf) -> None:
     ''' Create any directories that need to be created before we run. This
     should be run very early in our init process. '''
     os.makedirs(conf.getpath('scan', 'datadir'), mode=0o700, exist_ok=True)
+    os.makedirs(conf.getpath('scan', 'resultsdir'), mode=0o700, exist_ok=True)
 
 
 def initialize_state(s: StateFile) -> None:
@@ -215,7 +217,7 @@ def main(args, conf) -> None:
             TOR_CLIENT, conf.getpath('scan', 'good_relays'))
         ips = measure(TOR_CLIENT, relay_fp, dest, good_relays)
         if ips:
-            log.debug(ips)
+            log_result(relay_fp, time.time(), ips)
             d = STATE_FILE.get(K_RELAY_FP_DONE)
             d[relay_fp] = time.time()
             STATE_FILE.set(K_RELAY_FP_DONE, d)
