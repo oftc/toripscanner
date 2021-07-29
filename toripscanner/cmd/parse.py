@@ -113,7 +113,7 @@ def gen_parser(sub) -> ArgumentParser:
     d = 'Control a deployment of RelayScan'
     p = sub.add_parser('parse', description=d)
     p.add_argument(
-        '--max-age', type=int, default=1,
+        '--max-age', type=int, default=5,
         help='Results older than this, in days, will not be considered.')
     p.add_argument(
         'results_files', type=str, nargs='+',
