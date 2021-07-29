@@ -1,5 +1,4 @@
 from argparse import ArgumentParser
-from configparser import ConfigParser
 import logging
 import os
 from ..state_file import StateFile
@@ -22,7 +21,7 @@ def gen_parser(sub) -> ArgumentParser:
     return p
 
 
-def initialize_directories(conf: ConfigParser) -> None:
+def initialize_directories(conf) -> None:
     ''' Create any directories that need to be created before we run. This
     should be run very early in our init process. '''
     os.makedirs(conf.getpath('scan', 'datadir'), mode=0o700, exist_ok=True)
@@ -31,7 +30,7 @@ def initialize_directories(conf: ConfigParser) -> None:
 def initialize_state(s: StateFile) -> None:
     ''' Idempotently set initial state in the given state file (if the option
     is already set, don't overwrite it). '''
-    for key, default in [
+    for key, default in [  # type: ignore
         (K_RELAY_FP_QUEUE, []),
         (K_RELAY_FP_DONE, {}),
     ]:
