@@ -3,6 +3,7 @@ from queue import Queue, Empty
 from typing import Tuple, Union
 import logging
 import os
+import time
 from .. import tor_client as tor_client_builder
 from ..state_file import StateFile
 from stem.control import Controller  # type: ignore
@@ -69,11 +70,38 @@ def get_tor_client(conf) -> \
     return True, c
 
 
-def schedule_new_relays(state: StateFile, tor: Controller):
+def schedule_new_relays(
+        state: StateFile, tor: Controller,
+        dest: Tuple[str, int], interval: int):
     ''' Query the current consensus for relays. Add ones we haven't measured
     recently to the queue to be measured (if they aren't already in it). '''
-    pass
     log.info('Looking for any new relays that need measured.')
+    exits = set()
+    for desc in tor.get_server_descriptors():
+        if not desc.exit_policy or not desc.exit_policy.can_exit_to(*dest):
+            continue
+        # log.debug('%s can exit to %s', desc.nickname, dest)
+        exits.add(desc.fingerprint)
+    not_waiting_exits = exits - set(state.get(K_RELAY_FP_QUEUE))
+    log.info(
+        '%d/%d relays in consensus are not already waiting',
+        len(not_waiting_exits), len(exits))
+    oldest_allowed = time.time() - interval
+    need_new_exits = set()
+    for e in not_waiting_exits:
+        if e not in state.get(K_RELAY_FP_DONE):
+            need_new_exits.add(e)
+            continue
+        t = state.get(K_RELAY_FP_DONE)[e]
+        if t < oldest_allowed:
+            need_new_exits.add(e)
+    log.info(
+        '%d/%d relays need a new result',
+        len(need_new_exits), len(not_waiting_exits))
+    for e in need_new_exits:
+        state.list_append(K_RELAY_FP_QUEUE, e, skip_write=True)
+    if len(need_new_exits):
+        state.write()
 
 
 def main(args, conf) -> None:
@@ -88,6 +116,9 @@ def main(args, conf) -> None:
         return
     assert not isinstance(tor_client_or_err, str)
     TOR_CLIENT = tor_client_or_err
+    dest = conf.getaddr('scan', 'destination')
+    interval = conf.getint('scan', 'interval')
+    schedule_new_relays(STATE_FILE, TOR_CLIENT, dest, interval)
     while True:
         # Handle a NEWCONSENSUS event, if any
         try:
@@ -99,7 +130,7 @@ def main(args, conf) -> None:
             log.debug('No NEWCONSENSUS event')
             pass
         else:
-            schedule_new_relays(STATE_FILE, TOR_CLIENT)
+            schedule_new_relays(STATE_FILE, TOR_CLIENT, dest, interval)
         # .... Add any other rare event handling here, probably
         # Finally, measure a single relay
         relay_fp = STATE_FILE.list_popleft(K_RELAY_FP_QUEUE, default=None)
@@ -107,4 +138,7 @@ def main(args, conf) -> None:
             log.debug('No relay needing measured')
             continue
         assert relay_fp is not None
-        log.info('Measuring {}', relay_fp)
+        log.info('Measuring %s', relay_fp)
+        d = STATE_FILE.get(K_RELAY_FP_DONE)
+        d[relay_fp] = time.time()
+        STATE_FILE.set(K_RELAY_FP_DONE, d)

@@ -32,6 +32,8 @@ TORRC_BASE: Dict[str, Union[str, List]] = {
     # consensuses.
     'DormantClientTimeout': '208 weeks',
     'DormantCanceledByStartup': '1',
+    # For full exit policies we need full server descriptors
+    'UseMicrodescriptors': '0',
 }
 
 
