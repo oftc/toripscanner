@@ -1,23 +1,26 @@
 from argparse import ArgumentParser
+from queue import Queue, Empty
 from typing import Tuple, Union
 import logging
 import os
 from .. import tor_client as tor_client_builder
 from ..state_file import StateFile
 from stem.control import Controller  # type: ignore
-from stem.response.events import NewConsensusEvent  # type: ignore
 
 
 log = logging.getLogger(__name__)
 #: Stores state that may need, or that definitely needs, to persist across
 #: invocations.
 STATE_FILE: StateFile
-#: The stem Controller for our tor client
-TOR_CLIENT: Controller
 #: State key for queued relay fingerprints we want to test
 K_RELAY_FP_QUEUE = 'relay_fp_queue'
 #: State key for dict storing when we last successfully scanned each relay
 K_RELAY_FP_DONE = 'relay_fp_done'
+#: The stem Controller for our tor client
+TOR_CLIENT: Controller
+#: Queue for NEWCONSENSUS events to make it from the stem thread to the main
+#: thread.
+Q_TOR_EV_NEWCONSENSUS: Queue = Queue()
 
 
 def gen_parser(sub) -> ArgumentParser:
@@ -45,10 +48,6 @@ def initialize_state(s: StateFile) -> None:
     s.write()
 
 
-def _notif_tor_event_NEWCONSENSUS(event: NewConsensusEvent) -> None:
-    ''' Called from stem in a different thread for NEWCONSENSUS events. '''
-
-
 def get_tor_client(conf) -> \
         Tuple[bool, Union[Controller, str]]:
     ''' Create a Tor client, connect to its control socket, authenticate, and
@@ -65,8 +64,16 @@ def get_tor_client(conf) -> \
     )
     if not c:
         return False, 'Unable to launch and connect to tor client'
-    c.add_event_listener(_notif_tor_event_NEWCONSENSUS, 'NEWCONSENSUS')
+    c.add_event_listener(
+        lambda e: Q_TOR_EV_NEWCONSENSUS.put(e), 'NEWCONSENSUS')
     return True, c
+
+
+def schedule_new_relays(state: StateFile, tor: Controller):
+    ''' Query the current consensus for relays. Add ones we haven't measured
+    recently to the queue to be measured (if they aren't already in it). '''
+    pass
+    log.info('Looking for any new relays that need measured.')
 
 
 def main(args, conf) -> None:
@@ -81,4 +88,23 @@ def main(args, conf) -> None:
         return
     assert not isinstance(tor_client_or_err, str)
     TOR_CLIENT = tor_client_or_err
-    log.debug('Ready!')
+    while True:
+        # Handle a NEWCONSENSUS event, if any
+        try:
+            # event only contains new/changed entries. So we will just query
+            # the consensus ourself if there's an event telling us there's a
+            # new one
+            _ = Q_TOR_EV_NEWCONSENSUS.get(timeout=1)
+        except Empty:
+            log.debug('No NEWCONSENSUS event')
+            pass
+        else:
+            schedule_new_relays(STATE_FILE, TOR_CLIENT)
+        # .... Add any other rare event handling here, probably
+        # Finally, measure a single relay
+        relay_fp = STATE_FILE.list_popleft(K_RELAY_FP_QUEUE, default=None)
+        if relay_fp is None:
+            log.debug('No relay needing measured')
+            continue
+        assert relay_fp is not None
+        log.info('Measuring {}', relay_fp)
