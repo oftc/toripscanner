@@ -1,11 +1,13 @@
 from argparse import ArgumentParser
 from queue import Queue, Empty
-from typing import Tuple, Union
+from typing import Tuple, Union, Iterable
 import logging
 import os
 import time
 from .. import tor_client as tor_client_builder
 from ..state_file import StateFile
+from ..test_utils import get_socks_port, build_gaps_circuit, get_good_relays,\
+    circuit_str, attach_stream_to_circuit_listener
 from stem.control import Controller  # type: ignore
 
 
@@ -104,6 +106,26 @@ def schedule_new_relays(
         state.write()
 
 
+def measure(tor: Controller, fp: str, good_relays: Iterable[str]) -> bool:
+    socks_addrport = get_socks_port(tor)
+    assert socks_addrport
+    success, circid_or_err = build_gaps_circuit(
+        [None, fp], tor, good_relays)
+    if not success:
+        log.warning(f'Unable to measure {fp} (1): {circid_or_err}')
+        return False
+    circid = circid_or_err
+    log.debug(f'Will measure {fp} on {circid} {circuit_str(tor, circid)}')
+    listener = attach_stream_to_circuit_listener(tor, circid)
+    tor.add_event_listener(listener, 'STREAM')
+    tor.remove_event_listener(listener)
+    try:
+        tor.close_circuit(circid)
+    except Exception as e:
+        log.warning(e)
+    return True
+
+
 def main(args, conf) -> None:
     global STATE_FILE
     global TOR_CLIENT
@@ -138,7 +160,12 @@ def main(args, conf) -> None:
             log.debug('No relay needing measured')
             continue
         assert relay_fp is not None
-        log.info('Measuring %s', relay_fp)
-        d = STATE_FILE.get(K_RELAY_FP_DONE)
-        d[relay_fp] = time.time()
-        STATE_FILE.set(K_RELAY_FP_DONE, d)
+        log.info(
+            f'Measuring {relay_fp}. '
+            f'{len(STATE_FILE.get(K_RELAY_FP_QUEUE))} relays remain')
+        good_relays = get_good_relays(
+            TOR_CLIENT, conf.getpath('scan', 'good_relays'))
+        if measure(TOR_CLIENT, relay_fp, good_relays):
+            d = STATE_FILE.get(K_RELAY_FP_DONE)
+            d[relay_fp] = time.time()
+            STATE_FILE.set(K_RELAY_FP_DONE, d)
