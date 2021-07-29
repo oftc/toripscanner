@@ -19,6 +19,7 @@ def get_package_data():
     return [
         'config.default.ini',
         'config.log.default.ini',
+        'parse-header.txt',
     ]
 
 

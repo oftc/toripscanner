@@ -2,6 +2,7 @@ import logging
 from argparse import ArgumentParser
 from typing import Dict, Any
 import toripscanner.cmd.scan
+import toripscanner.cmd.parse
 from . import __version__
 from .config import get_config, config_logging
 
@@ -21,6 +22,7 @@ def create_parser():
     #                help='Override the configured toripscanner log level')
     sub = p.add_subparsers(dest='cmd')
     toripscanner.cmd.scan.gen_parser(sub)
+    toripscanner.cmd.parse.gen_parser(sub)
     return p
 
 
@@ -49,6 +51,10 @@ def call_real_main(args, conf) -> None:
     cmds = {
         'scan': {
             'f': toripscanner.cmd.scan.main,
+            'a': def_args, 'kw': def_kwargs,
+        },
+        'parse': {
+            'f': toripscanner.cmd.parse.main,
             'a': def_args, 'kw': def_kwargs,
         },
     }
