@@ -3,7 +3,7 @@
 import logging
 import os
 import random
-from typing import Sequence, Optional, Tuple, Iterable
+from typing import Sequence, Optional, Tuple, Iterable, Set
 import stem  # type: ignore
 from stem.control import Controller  # type: ignore
 
@@ -140,7 +140,7 @@ def get_control_port(c: Controller) -> Optional[Tuple[str, int]]:
 
 
 def get_good_relays(c: Controller, fname: str) -> Iterable[str]:
-    out = set()
+    out: Set[str] = set()
     if not os.path.exists(fname):
         return out
     with open(fname, 'rt') as fd:
