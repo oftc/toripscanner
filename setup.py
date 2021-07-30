@@ -62,6 +62,7 @@ setup(
     install_requires=[
         'stem==1.8.0',
         'PySocks==1.7.1',
+        'PyYAML==5.4.1',
         # 'cbor2==5.2.0',
     ],
     extras_require={

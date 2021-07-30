@@ -7,6 +7,7 @@ import re
 import socks  # type: ignore
 import socket
 import time
+import yaml
 from .. import tor_client as tor_client_builder
 from ..results_logger import log_result
 from ..state_file import StateFile
@@ -75,6 +76,58 @@ def get_tor_client(conf) -> \
     c.add_event_listener(
         lambda e: Q_TOR_EV_NEWCONSENSUS.put(e), 'NEWCONSENSUS')
     return True, c
+
+
+def get_servers_yaml(fname: str) -> Tuple[bool, Union[dict, str]]:
+    ''' Load servers.yaml and return it if possible. Caller is responsible for
+    paring it down to useful data. '''
+    if not os.path.exists(fname):
+        return False, f'{fname} does not exist. Copy it from OFTC infra.'
+    with open(fname) as fd:
+        try:
+            d = yaml.safe_load(fd.read())
+        except Exception as e:
+            return False, f'Unable to load servers.yaml: {e}'
+        return True, d
+
+
+def get_servers(fname: str) -> Tuple[bool, Union[dict, str]]:
+    ''' Load servers.yaml and reduce it down to just servers that should be
+    connected to. If possible, return a dict like this::
+
+        {
+            'server1': ( ipv4 or None, ipv6 or None),
+            'server2': ( ipv4 or None, ipv6 or None),
+        }
+    '''
+    success, yaml_or_err = get_servers_yaml(fname)
+    if not success:
+        return success, yaml_or_err
+
+    def is_good_server(d: dict) -> bool:
+        # is a leaf. A server is a leaf by default, and becomes not-leaf by
+        # having hub defined and having hub set to True
+        if 'hub' not in d or ('hub' in d and not d['hub']):
+            # But even if it is a leaf, we still need to make sure it is
+            # supposed to listen for users. It does by default if userlisten is
+            # not specified.
+            if 'userlisten' not in d:
+                return True
+            return d['userlisten']
+        # is a hub, but still might be configured explicity to listen for users
+        return 'userlisten' in d and d['userlisten']
+
+    assert isinstance(yaml_or_err, dict)
+    yaml = yaml_or_err
+    out = {}
+    for s in yaml['servers']:
+        if not is_good_server(s):
+            continue
+        out[s['name']] = (
+            s['ip'] if 'ip' in s else None,
+            s['ip6'] if 'ip6' in s else None,
+        )
+    return True, out
 
 
 def schedule_new_relays(
@@ -195,6 +248,11 @@ def main(args, conf) -> None:
     initialize_directories(conf)
     STATE_FILE = StateFile.from_file(conf.getpath('scan', 'state'))
     initialize_state(STATE_FILE)
+    success, servers_or_err = get_servers(conf.getpath('scan', 'servers_yaml'))
+    if not success:
+        log.error(servers_or_err)
+        return
+    servers = servers_or_err
     success, tor_client_or_err = get_tor_client(conf)
     if not success:
         log.error(tor_client_or_err)
