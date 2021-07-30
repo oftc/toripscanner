@@ -36,6 +36,14 @@ TORRC_BASE: Dict[str, Union[str, List]] = {
     'UseMicrodescriptors': '0',
 }
 
+TORRC_RUNTIME_OPTIONS: Dict[str, Union[str, List]] = {
+    # We build our own circuits and only use our own circuits. Letting tor make
+    # some for us is a waste
+    '__DisablePredictedCircuits': '1',
+    # We do this ourselves
+    '__LeaveStreamsUnattached': '1',
+}
+
 
 def _connect(loc: str):
     ''' Connect to a Tor client via its ControlSocket at *loc*
@@ -161,6 +169,7 @@ def launch(
         log.error('Unable to connect to Tor')
         return None
     assert isinstance(c, Controller)
+    c.set_options(TORRC_RUNTIME_OPTIONS)
     c.set_options(torrc_extra_dict_runtime)
     log.info(
         'Started and connected to Tor %s via %s',
