@@ -215,20 +215,20 @@ def ips_from_hostname(hostname: str) -> Collection[str]:
 
 def do_one_dest(dest: Tuple[str, int], socks_addrport: Tuple[str, int]):
     ips = set()
+    resp = ''
     s = socks.socksocket()
     s.set_proxy(socks.SOCKS5, *socks_addrport)
-    s.settimeout(10)
+    s.settimeout(15)
     try:
         s.connect(dest)
         s.sendall(b'QUIT\n')
+        while True:
+            new = s.recv(4096).decode('utf-8')
+            if not len(new):
+                break
+            resp += new
     except Exception as e:
         return False, f'{type(e)} {e}'
-    resp = ''
-    while True:
-        new = s.recv(4096).decode('utf-8')
-        if not len(new):
-            break
-        resp += new
     host = host_from_resp(resp)
     if host:
         ips.update(ips_from_hostname(host))
