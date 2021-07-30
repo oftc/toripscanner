@@ -3,6 +3,7 @@ from queue import Queue, Empty
 from typing import Tuple, Union, Iterable, Optional, Set, Collection
 import logging
 import os
+import random
 import re
 import socks  # type: ignore
 import socket
@@ -130,19 +131,45 @@ def get_servers(fname: str) -> Tuple[bool, Union[dict, str]]:
     return True, out
 
 
+def find_reachable_servers(
+        desc, servers: dict, ports: Collection[int] = [6667]) \
+        -> Tuple[Optional[Tuple[str, int]], Optional[Tuple[str, int]]]:
+    ''' Given a server descriptor and a the dict of servers and their IPs,
+    determine if this relay can exit to any server.
+
+    Returns an ipv4 server if possible and an ipv6 server if possible:
+    ((ipv4, port) or None, (ipv6, port) or None).
+    '''
+    if not desc.exit_policy:
+        return None
+    good_ipv4, good_ipv6 = [], []
+    for port in ports:
+        for ipv4, ipv6 in servers.values():
+            if desc.exit_policy.can_exit_to(ipv4, port):
+                good_ipv4.append((ipv4, port))
+            if desc.exit_policy.can_exit_to(ipv6, port):
+                good_ipv6.append((ipv6, port))
+    return (
+        random.choice(good_ipv4) if len(good_ipv4) else None,
+        random.choice(good_ipv6) if len(good_ipv6) else None,
+    )
+
+
 def schedule_new_relays(
         state: StateFile, tor: Controller,
-        dest: Tuple[str, int], interval: int):
+        servers: dict, interval: int):
     ''' Query the current consensus for relays. Add ones we haven't measured
     recently to the queue to be measured (if they aren't already in it). '''
     log.info('Looking for any new relays that need measured.')
-    exits = set()
+    exits = {}
     for desc in tor.get_server_descriptors():
-        if not desc.exit_policy or not desc.exit_policy.can_exit_to(*dest):
+        ipv4_dest, ipv6_dest = find_reachable_servers(desc, servers)
+        if not ipv4_dest and not ipv6_dest:
             continue
         # log.debug('%s can exit to %s', desc.nickname, dest)
-        exits.add(desc.fingerprint)
-    not_waiting_exits = exits - set(state.get(K_RELAY_FP_QUEUE))
+        exits[desc.fingerprint] = (ipv4_dest, ipv6_dest)
+    not_waiting_exits = exits.keys() - {
+        item[0] for item in state.get(K_RELAY_FP_QUEUE)}
     log.info(
         '%d/%d relays in consensus are not already waiting',
         len(not_waiting_exits), len(exits))
@@ -159,7 +186,8 @@ def schedule_new_relays(
         '%d/%d relays need a new result',
         len(need_new_exits), len(not_waiting_exits))
     for e in need_new_exits:
-        state.list_append(K_RELAY_FP_QUEUE, e, skip_write=True)
+        state.list_append(K_RELAY_FP_QUEUE, (e, exits[e]), skip_write=True)
+        # state.list_append(K_RELAY_FP_QUEUE, e, skip_write=True)
     if len(need_new_exits):
         state.write()
 
@@ -185,8 +213,30 @@ def ips_from_hostname(hostname: str) -> Collection[str]:
     return out
 
 
+def do_one_dest(dest: Tuple[str, int], socks_addrport: Tuple[str, int]):
+    ips = set()
+    s = socks.socksocket()
+    s.set_proxy(socks.SOCKS5, *socks_addrport)
+    s.settimeout(10)
+    try:
+        s.connect(dest)
+        s.sendall(b'QUIT\n')
+    except Exception as e:
+        return False, f'{type(e)} {e}'
+    resp = ''
+    while True:
+        new = s.recv(4096).decode('utf-8')
+        if not len(new):
+            break
+        resp += new
+    host = host_from_resp(resp)
+    if host:
+        ips.update(ips_from_hostname(host))
+    return True, ips
+
+
 def measure(
-        tor: Controller, fp: str, dest: Tuple[str, int],
+        tor: Controller, fp: str, dests: Collection[Tuple[str, int]],
         good_relays: Iterable[str]) -> Collection[str]:
     socks_addrport = get_socks_port(tor)
     assert socks_addrport
@@ -207,33 +257,14 @@ def measure(
     log.debug(f'Will measure {fp} on {circid} {circuit_str(tor, circid)}')
     listener = attach_stream_to_circuit_listener(tor, circid)
     tor.add_event_listener(listener, 'STREAM')
-    s = socks.socksocket()
-    s.set_proxy(socks.SOCKS5, *socks_addrport)
-    try:
-        s.connect(dest)
-        s.sendall(b'QUIT\n')
-    except Exception as e:
-        log.warning(e)
-        try:
-            s.close()
-        except Exception as e2:
-            log.warning(e2)
-        tor.remove_event_listener(listener)
-        try:
-            tor.close_circuit(circid)
-        except Exception as e2:
-            log.warning(e2)
-        return ips
-    resp = ''
-    while True:
-        new = s.recv(4096).decode('utf-8')
-        if not len(new):
-            break
-        resp += new
-    host = host_from_resp(resp)
-    if host:
-        ips.update(ips_from_hostname(host))
-    s.close()
+    for dest in dests:
+        log.debug(f'{fp} to {dest}')
+        success, ips_or_err = do_one_dest(dest, socks_addrport)
+        if not success:
+            log.warning(ips_or_err)
+            continue
+        assert not isinstance(ips_or_err, str)
+        ips.update(ips_or_err)
     tor.remove_event_listener(listener)
     try:
         tor.close_circuit(circid)
@@ -259,11 +290,10 @@ def main(args, conf) -> None:
         return
     assert not isinstance(tor_client_or_err, str)
     TOR_CLIENT = tor_client_or_err
-    dest = conf.getaddr('scan', 'destination')
     interval = conf.getint('scan', 'interval')
     heartbeat_interval = conf.getint('scan', 'heartbeat_interval')
     last_action = time.time()
-    schedule_new_relays(STATE_FILE, TOR_CLIENT, dest, interval)
+    schedule_new_relays(STATE_FILE, TOR_CLIENT, servers, interval)
     while True:
         if last_action + heartbeat_interval < time.time():
             log.debug(
@@ -278,11 +308,12 @@ def main(args, conf) -> None:
         except Empty:
             pass
         else:
-            schedule_new_relays(STATE_FILE, TOR_CLIENT, dest, interval)
+            schedule_new_relays(STATE_FILE, TOR_CLIENT, servers, interval)
             last_action = time.time()
         # .... Add any other rare event handling here, probably
         # Finally, measure a single relay
-        relay_fp = STATE_FILE.list_popleft(K_RELAY_FP_QUEUE, default=None)
+        relay_fp, dests = STATE_FILE.list_popleft(
+            K_RELAY_FP_QUEUE, default=(None, None))
         if relay_fp is None:
             continue
         assert relay_fp is not None
@@ -292,7 +323,7 @@ def main(args, conf) -> None:
             f'{len(STATE_FILE.get(K_RELAY_FP_QUEUE))} relays remain')
         good_relays = get_good_relays(
             TOR_CLIENT, conf.getpath('scan', 'good_relays'))
-        ips = measure(TOR_CLIENT, relay_fp, dest, good_relays)
+        ips = measure(TOR_CLIENT, relay_fp, dests, good_relays)
         if ips:
             log_result(relay_fp, time.time(), ips)
             d = STATE_FILE.get(K_RELAY_FP_DONE)
