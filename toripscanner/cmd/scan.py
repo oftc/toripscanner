@@ -203,8 +203,14 @@ def main(args, conf) -> None:
     TOR_CLIENT = tor_client_or_err
     dest = conf.getaddr('scan', 'destination')
     interval = conf.getint('scan', 'interval')
+    heartbeat_interval = conf.getint('scan', 'heartbeat_interval')
+    last_action = time.time()
     schedule_new_relays(STATE_FILE, TOR_CLIENT, dest, interval)
     while True:
+        if last_action + heartbeat_interval < time.time():
+            log.debug(
+                'We\'re still alive. There just hasn\'t been anything to do')
+            last_action = time.time()
         # Handle a NEWCONSENSUS event, if any
         try:
             # event only contains new/changed entries. So we will just query
@@ -212,17 +218,17 @@ def main(args, conf) -> None:
             # new one
             _ = Q_TOR_EV_NEWCONSENSUS.get(timeout=1)
         except Empty:
-            log.debug('No NEWCONSENSUS event')
             pass
         else:
             schedule_new_relays(STATE_FILE, TOR_CLIENT, dest, interval)
+            last_action = time.time()
         # .... Add any other rare event handling here, probably
         # Finally, measure a single relay
         relay_fp = STATE_FILE.list_popleft(K_RELAY_FP_QUEUE, default=None)
         if relay_fp is None:
-            log.debug('No relay needing measured')
             continue
         assert relay_fp is not None
+        last_action = time.time()
         log.info(
             f'Measuring {relay_fp}. '
             f'{len(STATE_FILE.get(K_RELAY_FP_QUEUE))} relays remain')
