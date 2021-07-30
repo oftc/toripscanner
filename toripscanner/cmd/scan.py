@@ -1,6 +1,7 @@
 from argparse import ArgumentParser
 from queue import Queue, Empty
-from typing import Tuple, Union, Iterable, Optional, Set, Collection
+from typing import Tuple, Union, Iterable, Optional, Set, Collection, Dict,\
+    List
 import itertools
 import logging
 import os
@@ -141,21 +142,21 @@ def find_reachable_servers(
     Returns an ipv4 server if possible and an ipv6 server if possible:
     ((ipv4, port) or None, (ipv6, port) or None).
     '''
-    if not desc.exit_policy:
-        return None, None
     servers_ipv4 = [s[0] for s in servers.values() if s[0] is not None]
     servers_ipv6 = [s[1] for s in servers.values() if s[1] is not None]
     random.shuffle(servers_ipv4)
     random.shuffle(servers_ipv6)
     chosen_ipv4, chosen_ipv6 = None, None
-    for ipv4, port in itertools.product(servers_ipv4, ports):
-        if desc.exit_policy.can_exit_to(ipv4, port):
-            chosen_ipv4 = (ipv4, port)
-            break
-    for ipv6, port in itertools.product(servers_ipv6, ports):
-        if desc.exit_policy.can_exit_to(ipv6, port):
-            chosen_ipv6 = (ipv6, port)
-            break
+    if desc.exit_policy:
+        for ipv4, port in itertools.product(servers_ipv4, ports):
+            if desc.exit_policy.can_exit_to(ipv4, port):
+                chosen_ipv4 = (ipv4, port)
+                break
+    if desc.exit_policy_v6:
+        for ipv6, port in itertools.product(servers_ipv6, ports):
+            if desc.exit_policy_v6.can_exit_to(ipv6, port):
+                chosen_ipv6 = (ipv6, port)
+                break
     return chosen_ipv4, chosen_ipv6
 
 
@@ -165,13 +166,16 @@ def schedule_new_relays(
     ''' Query the current consensus for relays. Add ones we haven't measured
     recently to the queue to be measured (if they aren't already in it). '''
     log.info('Looking for any new relays that need measured.')
-    exits = {}
+    exits: Dict[str, List[Tuple[str, int]]] = {}
     for desc in tor.get_server_descriptors():
         ipv4_dest, ipv6_dest = find_reachable_servers(desc, servers)
         if not ipv4_dest and not ipv6_dest:
             continue
-        # log.debug('%s can exit to %s', desc.nickname, dest)
-        exits[desc.fingerprint] = (ipv4_dest, ipv6_dest)
+        exits[desc.fingerprint] = []
+        if ipv4_dest:
+            exits[desc.fingerprint].append(ipv4_dest)
+        if ipv6_dest:
+            exits[desc.fingerprint].append(ipv6_dest)
     not_waiting_exits = exits.keys() - {
         item[0] for item in state.get(K_RELAY_FP_QUEUE)}
     log.info(
@@ -229,11 +233,11 @@ def do_one_dest(dest: Tuple[str, int], socks_addrport: Tuple[str, int]) \
         s.sendall(b'QUIT\n')
         while True:
             new = s.recv(4096).decode('utf-8')
-            if not len(new):
+            if not new:
                 break
             resp += new
     except Exception as e:
-        return False, f'{type(e)} {e}'
+        return False, f'{type(e).__name__} {e}'
     host = host_from_resp(resp)
     if host:
         ips.update(ips_from_hostname(host))
