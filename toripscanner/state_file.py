@@ -59,7 +59,7 @@ class StateFile:
         fname = fname or self.fname
         if not fname:
             return
-        log.debug('Writing state to %s', fname)
+        # log.debug('Writing state to %s', fname)
         with gzip.open(fname, 'w') as fd:
             fd.write(json.dumps(self.d).encode('utf-8'))
         return
