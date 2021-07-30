@@ -1,6 +1,7 @@
 from argparse import ArgumentParser
 from queue import Queue, Empty
 from typing import Tuple, Union, Iterable, Optional, Set, Collection
+import itertools
 import logging
 import os
 import random
@@ -142,17 +143,20 @@ def find_reachable_servers(
     '''
     if not desc.exit_policy:
         return None
-    good_ipv4, good_ipv6 = [], []
-    for port in ports:
-        for ipv4, ipv6 in servers.values():
-            if desc.exit_policy.can_exit_to(ipv4, port):
-                good_ipv4.append((ipv4, port))
-            if desc.exit_policy.can_exit_to(ipv6, port):
-                good_ipv6.append((ipv6, port))
-    return (
-        random.choice(good_ipv4) if len(good_ipv4) else None,
-        random.choice(good_ipv6) if len(good_ipv6) else None,
-    )
+    servers_ipv4 = [s[0] for s in servers.values() if s[0] is not None]
+    servers_ipv6 = [s[1] for s in servers.values() if s[1] is not None]
+    random.shuffle(servers_ipv4)
+    random.shuffle(servers_ipv6)
+    chosen_ipv4, chosen_ipv6 = None, None
+    for ipv4, port in itertools.product(servers_ipv4, ports):
+        if desc.exit_policy.can_exit_to(ipv4, port):
+            chosen_ipv4 = (ipv4, port)
+            break
+    for ipv6, port in itertools.product(servers_ipv6, ports):
+        if desc.exit_policy.can_exit_to(ipv6, port):
+            chosen_ipv6 = (ipv6, port)
+            break
+    return chosen_ipv4, chosen_ipv6
 
 
 def schedule_new_relays(
