@@ -142,7 +142,7 @@ def find_reachable_servers(
     ((ipv4, port) or None, (ipv6, port) or None).
     '''
     if not desc.exit_policy:
-        return None
+        return None, None
     servers_ipv4 = [s[0] for s in servers.values() if s[0] is not None]
     servers_ipv6 = [s[1] for s in servers.values() if s[1] is not None]
     random.shuffle(servers_ipv4)
@@ -217,8 +217,9 @@ def ips_from_hostname(hostname: str) -> Collection[str]:
     return out
 
 
-def do_one_dest(dest: Tuple[str, int], socks_addrport: Tuple[str, int]):
-    ips = set()
+def do_one_dest(dest: Tuple[str, int], socks_addrport: Tuple[str, int]) \
+        -> Tuple[bool, Union[Set[str], str]]:
+    ips: Set[str] = set()
     resp = ''
     s = socks.socksocket()
     s.set_proxy(socks.SOCKS5, *socks_addrport)
@@ -287,6 +288,7 @@ def main(args, conf) -> None:
     if not success:
         log.error(servers_or_err)
         return
+    assert not isinstance(servers_or_err, str)
     servers = servers_or_err
     success, tor_client_or_err = get_tor_client(conf)
     if not success:
