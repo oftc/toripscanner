@@ -127,18 +127,6 @@ def get_socks_port(c: Controller) -> Optional[Tuple[str, int]]:
     return addr_ports[0]
 
 
-def get_control_port(c: Controller) -> Optional[Tuple[str, int]]:
-    ''' Get a ControlPort from Tor. If there is none, return None.
-
-    Return value is an (address, port) tuple. Tor may have multiple control
-    ports open for some reason; this function always returns the first. If this
-    consistency is actually needed, hopefully first is always the same ...  '''
-    addr_ports = c.get_listeners('CONTROL', default=None)
-    if addr_ports is None:
-        return None
-    return addr_ports[0]
-
-
 def get_good_relays(c: Controller, fname: str) -> Iterable[str]:
     out: Set[str] = set()
     if not os.path.exists(fname):

@@ -88,30 +88,6 @@ class StateFile:
             return default
         return self.d[key]
 
-    def get_and_increment(
-            self, key: str, default: int, skip_write: bool = False):
-        ''' Return the current value stored at ``key`` and then increment it.
-
-        If ``key`` does not exist, return ``default``, create it, and store
-        ``default+1``.
-
-        If ``skip_write``, then do not update the underlying state file.  '''
-        # Ensure the key exists. Never write here, because either
-        # skip_write=True (thus skipping is correct), or skip_write=False and
-        # we'll do a write later.
-        if not self.is_set(key):
-            self.set(key, default, skip_write=True)
-        # We just did this, so should be fine
-        assert self.is_set(key)
-        # Get the current value. Give a value for default so that we can ...
-        ret = self.get(key, default=None)
-        # ... assert that we didn't get the default value.
-        assert ret is not None
-        # Increment, maybe writing.
-        self.set(key, ret+1, skip_write=skip_write)
-        # Finally, return the value.
-        return ret
-
     def list_append(self, key: str, val: Any, skip_write: bool = False):
         ''' Append the given ``val`` to the end of the list stored at ``key``.
 

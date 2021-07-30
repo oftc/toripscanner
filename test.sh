@@ -2,3 +2,4 @@
 set -eux
 flake8 toripscanner
 mypy toripscanner
+vulture toripscanner

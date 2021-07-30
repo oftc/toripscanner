@@ -89,25 +89,6 @@ def unique_ips(d: Mapping[str, Set[str]]) -> Set[str]:
     return out
 
 
-def seconds_to_duration(secs):
-    if not secs:
-        return '0s'
-    m, s = divmod(secs, 60)
-    h, m = divmod(m, 60)
-    d, h = divmod(h, 24)
-    d, h, m, s = int(d), int(h), int(m), int(round(s, 0))
-    out = ''
-    if d > 0:
-        out += f'{d}d'
-    if h > 0:
-        out += f'{h}h'
-    if m > 0:
-        out += f'{m}m'
-    if s > 0:
-        out += f'{s}s'
-    return out
-
-
 def gen_parser(sub) -> ArgumentParser:
     ''' Add the cmd line options for this RelayScan command '''
     d = 'Control a deployment of RelayScan'
