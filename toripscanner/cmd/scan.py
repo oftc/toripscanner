@@ -387,7 +387,7 @@ def main(args, conf) -> None:
         good_relays = get_good_relays(
             TOR_CLIENT, conf.getpath('scan', 'good_relays'))
         # only measure to the ircd dests
-        ircd_dests = {d for d in dests if d[1] != webclient[1]}
+        ircd_dests = [d for d in dests if d[1] != webclient[1]]
         ips = measure(
             TOR_CLIENT, relay_fp, ircd_dests, True, good_relays)
         if ips:
