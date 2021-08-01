@@ -11,6 +11,7 @@ import random
 import re
 import socks  # type: ignore
 import socket
+import ssl
 import time
 import yaml
 from .. import tor_client as tor_client_builder
@@ -34,6 +35,11 @@ TOR_CLIENT: Controller
 #: Queue for NEWCONSENSUS events to make it from the stem thread to the main
 #: thread.
 Q_TOR_EV_NEWCONSENSUS: Queue = Queue()
+#: Defined in main, a function that takes a socket and wraps it in SSL. We do
+#: it this way instead of something more obvious so that we don't have to pass
+#: all the way down the measurement function call stack the SSL parameters that
+#: don't ever change.
+WRAP_SSL_FN = None
 
 
 def gen_parser(sub) -> ArgumentParser:
@@ -137,7 +143,7 @@ def get_servers(fname: str) -> Tuple[bool, Union[dict, str]]:
 
 def find_reachable_servers(
         desc, servers: dict, webclient: Tuple[str, int],
-        ports: Collection[int] = [6667]) \
+        ports: Collection[int]) \
         -> Iterable[Tuple[str, int]]:
     ''' Given a server descriptor and other stuff,
     determine if this relay can exit to any server.
@@ -186,13 +192,14 @@ def find_reachable_servers(
 
 def schedule_new_relays(
         state: StateFile, tor: Controller,
-        servers: dict, webclient: Tuple[str, int]):
+        servers: dict, webclient: Tuple[str, int], irc_ports: Collection[int]):
     ''' Query the current consensus for relays. Add ones we haven't measured
     recently to the queue to be measured (if they aren't already in it). '''
     log.info('Looking for any new relays that need measured.')
     exits: Dict[str, List[Tuple[str, int]]] = {}
     for desc in tor.get_server_descriptors():
-        dests = [_ for _ in find_reachable_servers(desc, servers, webclient)]
+        dests = [_ for _ in find_reachable_servers(
+            desc, servers, webclient, irc_ports)]
         if not len(dests):
             continue
         exits[desc.fingerprint] = dests
@@ -255,7 +262,8 @@ def hostnames_from_ip(ip: str) -> Set[str]:
     return {ret[0]} | set(ret[1])
 
 
-def do_one_dest(dest: Tuple[str, int], socks_addrport: Tuple[str, int]) \
+def do_one_dest(
+        dest: Tuple[str, int], socks_addrport: Tuple[str, int], use_ssl: bool)\
         -> Tuple[bool, Union[Set[str], str]]:
     ips: Set[str] = set()
     resp = ''
@@ -264,6 +272,9 @@ def do_one_dest(dest: Tuple[str, int], socks_addrport: Tuple[str, int]) \
     s.settimeout(15)
     try:
         s.connect(dest)
+        if use_ssl:
+            assert WRAP_SSL_FN
+            s = WRAP_SSL_FN(s)
         s.sendall(b'QUIT\n')
         while True:
             new = s.recv(4096).decode('utf-8')
@@ -280,7 +291,8 @@ def do_one_dest(dest: Tuple[str, int], socks_addrport: Tuple[str, int]) \
 
 def measure(
         tor: Controller, fp: str, dests: Collection[Tuple[str, int]],
-        do_dns_discovery: bool, good_relays: Iterable[str]) -> Collection[str]:
+        do_dns_discovery: bool, good_relays: Iterable[str],
+        irc_ssl_ports: Collection[int]) -> Collection[str]:
     socks_addrport = get_socks_port(tor)
     assert socks_addrport
     ips: Set[str] = set()
@@ -308,7 +320,8 @@ def measure(
         tor.add_event_listener(listener, 'STREAM')
         for dest in dests:
             log.debug(f'{fp} to {dest}')
-            success, ips_or_err = do_one_dest(dest, socks_addrport)
+            use_ssl = dest[1] in irc_ssl_ports
+            success, ips_or_err = do_one_dest(dest, socks_addrport, use_ssl)
             if not success:
                 log.warning(ips_or_err)
                 continue
@@ -332,9 +345,19 @@ def measure(
     return ips
 
 
+def wrap_ssl_fn(host):
+    context = ssl.create_default_context()
+
+    def closure(sin):
+        return context.wrap_socket(sin, server_hostname=host)
+    return closure
+
+
 def main(args, conf) -> None:
     global STATE_FILE
     global TOR_CLIENT
+    global WRAP_SSL_FN
+    WRAP_SSL_FN = wrap_ssl_fn(conf['scan']['ssl_hostname'])
     initialize_directories(conf)
     STATE_FILE = StateFile.from_file(conf.getpath('scan', 'state'))
     initialize_state(STATE_FILE)
@@ -355,8 +378,11 @@ def main(args, conf) -> None:
         conf.getint('scan', 'interval_max'))
     heartbeat_interval = conf.getint('scan', 'heartbeat_interval')
     webclient = conf.getaddr('scan', 'webclient_addr')
+    irc_ssl_ports = set([int(_) for _ in conf['scan']['ssl_ports'].split(',')])
+    irc_ports = set([int(_) for _ in conf['scan']['plain_ports'].split(',')]) \
+        | irc_ssl_ports
     last_action = time.time()
-    schedule_new_relays(STATE_FILE, TOR_CLIENT, servers, webclient)
+    schedule_new_relays(STATE_FILE, TOR_CLIENT, servers, webclient, irc_ports)
     while True:
         if last_action + heartbeat_interval < time.time():
             log.debug(
@@ -371,7 +397,8 @@ def main(args, conf) -> None:
         except Empty:
             pass
         else:
-            schedule_new_relays(STATE_FILE, TOR_CLIENT, servers, webclient)
+            schedule_new_relays(
+                STATE_FILE, TOR_CLIENT, servers, webclient, irc_ports)
             last_action = time.time()
         # .... Add any other rare event handling here, probably
         # Finally, measure a single relay
@@ -389,7 +416,7 @@ def main(args, conf) -> None:
         # only measure to the ircd dests
         ircd_dests = [d for d in dests if d[1] != webclient[1]]
         ips = measure(
-            TOR_CLIENT, relay_fp, ircd_dests, True, good_relays)
+            TOR_CLIENT, relay_fp, ircd_dests, True, good_relays, irc_ssl_ports)
         if ips:
             log.info(f'{relay_fp} is {ips}')
             log_result(relay_fp, time.time(), ips)
