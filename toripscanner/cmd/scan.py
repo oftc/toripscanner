@@ -162,7 +162,7 @@ def find_reachable_servers(
 
 def schedule_new_relays(
         state: StateFile, tor: Controller,
-        servers: dict, interval: int):
+        servers: dict):
     ''' Query the current consensus for relays. Add ones we haven't measured
     recently to the queue to be measured (if they aren't already in it). '''
     log.info('Looking for any new relays that need measured.')
@@ -181,14 +181,12 @@ def schedule_new_relays(
     log.info(
         '%d/%d relays in consensus are not already waiting',
         len(not_waiting_exits), len(exits))
-    oldest_allowed = time.time() - interval
     need_new_exits = set()
     for e in not_waiting_exits:
         if e not in state.get(K_RELAY_FP_DONE):
             need_new_exits.add(e)
             continue
-        t = state.get(K_RELAY_FP_DONE)[e]
-        if t < oldest_allowed:
+        if state.get(K_RELAY_FP_DONE)[e]['expire_ts'] < time.time():
             need_new_exits.add(e)
     log.info(
         '%d/%d relays need a new result',
@@ -300,10 +298,12 @@ def main(args, conf) -> None:
         return
     assert not isinstance(tor_client_or_err, str)
     TOR_CLIENT = tor_client_or_err
-    interval = conf.getint('scan', 'interval')
+    interval_range = (
+        conf.getint('scan', 'interval_min'),
+        conf.getint('scan', 'interval_max'))
     heartbeat_interval = conf.getint('scan', 'heartbeat_interval')
     last_action = time.time()
-    schedule_new_relays(STATE_FILE, TOR_CLIENT, servers, interval)
+    schedule_new_relays(STATE_FILE, TOR_CLIENT, servers)
     while True:
         if last_action + heartbeat_interval < time.time():
             log.debug(
@@ -318,7 +318,7 @@ def main(args, conf) -> None:
         except Empty:
             pass
         else:
-            schedule_new_relays(STATE_FILE, TOR_CLIENT, servers, interval)
+            schedule_new_relays(STATE_FILE, TOR_CLIENT, servers)
             last_action = time.time()
         # .... Add any other rare event handling here, probably
         # Finally, measure a single relay
@@ -337,5 +337,8 @@ def main(args, conf) -> None:
         if ips:
             log_result(relay_fp, time.time(), ips)
             d = STATE_FILE.get(K_RELAY_FP_DONE)
-            d[relay_fp] = time.time()
+            d[relay_fp] = {
+                'ts': time.time(),
+                'expire_ts': time.time() + random.uniform(*interval_range),
+            }
             STATE_FILE.set(K_RELAY_FP_DONE, d)

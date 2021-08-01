@@ -4,10 +4,11 @@ from typing import Dict, Any, Optional
 import gzip
 import logging
 import os
+import random
 
 
 log = logging.getLogger(__name__)
-VERSION: int = 1
+VERSION: int = 2
 
 
 class StateFile:
@@ -38,10 +39,7 @@ class StateFile:
                 'version we know is %d. Bad things may happen.',
                 fname, state.d['version'], VERSION)
         if state.d['version'] < VERSION:
-            log.warning(
-                'Need to update state format in %s from %d to %d, but nothing '
-                'to do that has been written yet.',
-                fname, state.d['version'], VERSION)
+            state = update_state_version(state, VERSION)
         state.fname = fname
         return state
 
@@ -111,3 +109,39 @@ class StateFile:
         item, the_list = the_list[0], the_list[1:]
         self.set(key, the_list, skip_write=skip_write)
         return item
+
+
+def update_state_version(state: StateFile, target: int) -> StateFile:
+    ''' Upgrade the state data format from whatever it is to the target
+    version.
+
+    Performs the updates one version at a time, recursively, until the state
+    has reached the target version.
+    '''
+    current = state.d['version']
+    assert current < target
+    if target - 1 != current:
+        state = update_state_version(state, target - 1)
+    current = state.d['version']
+    assert target - 1 == current
+    log.debug(f'Updating state format from version {current} to {target}')
+    # 1 -> 2 update
+    if target == 2:
+        # guess a reasonable expire time range is 3-6 days from whenever the
+        # result was recorded.
+        expire_range = (3*24*60*60, 6*24*60*60)
+        state.set(
+            'relay_fp_done', {
+                fp: {
+                    'ts': ts,
+                    'expire_ts': ts + random.uniform(*expire_range),
+                }
+                for fp, ts in
+                state.get('relay_fp_done', default=dict()).items()
+            },
+            skip_write=True,
+        )
+    # done
+    state.d['version'] = target
+    state.write()
+    return state
