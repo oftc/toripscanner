@@ -1,4 +1,6 @@
 from argparse import ArgumentParser
+from copy import copy
+from functools import lru_cache
 from queue import Queue, Empty
 from typing import Tuple, Union, Iterable, Optional, Set, Collection, Dict,\
     List
@@ -134,48 +136,66 @@ def get_servers(fname: str) -> Tuple[bool, Union[dict, str]]:
 
 
 def find_reachable_servers(
-        desc, servers: dict, ports: Collection[int] = [6667]) \
-        -> Tuple[Optional[Tuple[str, int]], Optional[Tuple[str, int]]]:
-    ''' Given a server descriptor and a the dict of servers and their IPs,
+        desc, servers: dict, webclient: Tuple[str, int],
+        ports: Collection[int] = [6667]) \
+        -> Iterable[Tuple[str, int]]:
+    ''' Given a server descriptor and other stuff,
     determine if this relay can exit to any server.
 
-    Returns an ipv4 server if possible and an ipv6 server if possible:
-    ((ipv4, port) or None, (ipv6, port) or None).
+    Yields (ip, port) as we find them. The IPs can be v4 or v6. Expect between
+    0 and 4 tuples to be returned. (but you should handle any number! :p)
+
+    - 0: this relay can't reach anything
+    - ... various possibilities ...
+    - 4: the relay can reach an ircd on ipv4, on ipv6, and can reach the web
+    client on both ipv4 and ipv6.
     '''
     servers_ipv4 = [s[0] for s in servers.values() if s[0] is not None]
     servers_ipv6 = [s[1] for s in servers.values() if s[1] is not None]
     random.shuffle(servers_ipv4)
     random.shuffle(servers_ipv6)
-    chosen_ipv4, chosen_ipv6 = None, None
+    web_ips = ips_from_hostname(webclient[0])
+    web_port = webclient[1]
+    web_ipv4 = [ip for ip in web_ips if ':' not in ip]
+    web_ipv6 = [ip for ip in web_ips if ':' in ip]
+    random.shuffle(web_ipv4)
+    random.shuffle(web_ipv6)
+    # has an ipv4 exit policy
     if desc.exit_policy:
+        # find an ircd it can exit to
         for ipv4, port in itertools.product(servers_ipv4, ports):
             if desc.exit_policy.can_exit_to(ipv4, port):
-                chosen_ipv4 = (ipv4, port)
+                yield ipv4, port
                 break
+        # see if it can exit to the web irc client
+        if len(web_ipv4) and \
+                desc.exit_policy.can_exit_to(web_ipv4[0], web_port):
+            yield web_ipv4[0], web_port
+    # has an ipv6 exit policy
     if desc.exit_policy_v6:
+        # find an ircd it can exit to
         for ipv6, port in itertools.product(servers_ipv6, ports):
             if desc.exit_policy_v6.can_exit_to(ipv6, port):
-                chosen_ipv6 = (ipv6, port)
+                yield ipv6, port
                 break
-    return chosen_ipv4, chosen_ipv6
+        # see if it can exit to the web irc client
+        if len(web_ipv6) and \
+                desc.exit_policy.can_exit_to(web_ipv6[0], web_port):
+            yield web_ipv6[0], web_port
 
 
 def schedule_new_relays(
         state: StateFile, tor: Controller,
-        servers: dict):
+        servers: dict, webclient: Tuple[str, int]):
     ''' Query the current consensus for relays. Add ones we haven't measured
     recently to the queue to be measured (if they aren't already in it). '''
     log.info('Looking for any new relays that need measured.')
     exits: Dict[str, List[Tuple[str, int]]] = {}
     for desc in tor.get_server_descriptors():
-        ipv4_dest, ipv6_dest = find_reachable_servers(desc, servers)
-        if not ipv4_dest and not ipv6_dest:
+        dests = [_ for _ in find_reachable_servers(desc, servers, webclient)]
+        if not len(dests):
             continue
-        exits[desc.fingerprint] = []
-        if ipv4_dest:
-            exits[desc.fingerprint].append(ipv4_dest)
-        if ipv6_dest:
-            exits[desc.fingerprint].append(ipv6_dest)
+        exits[desc.fingerprint] = dests
     not_waiting_exits = exits.keys() - {
         item[0] for item in state.get(K_RELAY_FP_QUEUE)}
     log.info(
@@ -211,12 +231,28 @@ def host_from_resp(resp: str) -> Optional[str]:
     return None
 
 
-def ips_from_hostname(hostname: str) -> Collection[str]:
+# maxsize of 1 because when we lookup the web irc client hostname, we do so
+# over and over again. We don't really want to do additional caching ourselves,
+# except in this instance. This should be fine. Don't increase it lightly.
+@lru_cache(maxsize=1)
+def ips_from_hostname(hostname: str) -> Set[str]:
     out = set()
-    for ret in socket.getaddrinfo(hostname, None, proto=socket.IPPROTO_TCP):
-        _, _, _, _, sockaddr = ret
-        out.add(sockaddr[0])
+    try:
+        for ret in socket.getaddrinfo(
+                hostname, None, proto=socket.IPPROTO_TCP):
+            _, _, _, _, sockaddr = ret
+            out.add(sockaddr[0])
+    except Exception:
+        return out
     return out
+
+
+def hostnames_from_ip(ip: str) -> Set[str]:
+    try:
+        ret = socket.gethostbyaddr(ip)
+    except Exception:
+        return set()
+    return {ret[0]} | set(ret[1])
 
 
 def do_one_dest(dest: Tuple[str, int], socks_addrport: Tuple[str, int]) \
@@ -244,7 +280,7 @@ def do_one_dest(dest: Tuple[str, int], socks_addrport: Tuple[str, int]) \
 
 def measure(
         tor: Controller, fp: str, dests: Collection[Tuple[str, int]],
-        good_relays: Iterable[str]) -> Collection[str]:
+        do_dns_discovery: bool, good_relays: Iterable[str]) -> Collection[str]:
     socks_addrport = get_socks_port(tor)
     assert socks_addrport
     ips: Set[str] = set()
@@ -277,6 +313,16 @@ def measure(
         tor.close_circuit(circid)
     except Exception as e:
         log.warning(e)
+    if do_dns_discovery:
+        # for every IP we found, do the DNS discovery trick to see if we can
+        # find any more. The copy() is so we iterate over a copy of ips and can
+        # update it directly.
+        ips.update({
+            new_ip
+            for ip in copy(ips)
+            for host in hostnames_from_ip(ip)
+            for new_ip in ips_from_hostname(host)
+        })
     return ips
 
 
@@ -302,8 +348,9 @@ def main(args, conf) -> None:
         conf.getint('scan', 'interval_min'),
         conf.getint('scan', 'interval_max'))
     heartbeat_interval = conf.getint('scan', 'heartbeat_interval')
+    webclient = conf.getaddr('scan', 'webclient_addr')
     last_action = time.time()
-    schedule_new_relays(STATE_FILE, TOR_CLIENT, servers)
+    schedule_new_relays(STATE_FILE, TOR_CLIENT, servers, webclient)
     while True:
         if last_action + heartbeat_interval < time.time():
             log.debug(
@@ -318,7 +365,7 @@ def main(args, conf) -> None:
         except Empty:
             pass
         else:
-            schedule_new_relays(STATE_FILE, TOR_CLIENT, servers)
+            schedule_new_relays(STATE_FILE, TOR_CLIENT, servers, webclient)
             last_action = time.time()
         # .... Add any other rare event handling here, probably
         # Finally, measure a single relay
@@ -333,8 +380,12 @@ def main(args, conf) -> None:
             f'{len(STATE_FILE.get(K_RELAY_FP_QUEUE))} relays remain')
         good_relays = get_good_relays(
             TOR_CLIENT, conf.getpath('scan', 'good_relays'))
-        ips = measure(TOR_CLIENT, relay_fp, dests, good_relays)
+        # only measure to the ircd dests
+        ircd_dests = {d for d in dests if d[1] != webclient[1]}
+        ips = measure(
+            TOR_CLIENT, relay_fp, ircd_dests, True, good_relays)
         if ips:
+            log.info(f'{relay_fp} is {ips}')
             log_result(relay_fp, time.time(), ips)
             d = STATE_FILE.get(K_RELAY_FP_DONE)
             d[relay_fp] = {
@@ -342,3 +393,5 @@ def main(args, conf) -> None:
                 'expire_ts': time.time() + random.uniform(*interval_range),
             }
             STATE_FILE.set(K_RELAY_FP_DONE, d)
+        else:
+            log.warning(f'{relay_fp} has no IPs?')
