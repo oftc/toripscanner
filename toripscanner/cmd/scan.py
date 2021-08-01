@@ -291,28 +291,30 @@ def measure(
     ips.add(descriptor.address)
     for or_addr, _, _ in descriptor.or_addresses:
         ips.add(or_addr)
-    success, circid_or_err = build_gaps_circuit(
-        [None, fp], tor, good_relays)
-    if not success:
-        log.warning(f'Unable to measure {fp} (1): {circid_or_err}')
-        return ips
-    circid = circid_or_err
-    log.debug(f'Will measure {fp} on {circid} {circuit_str(tor, circid)}')
-    listener = attach_stream_to_circuit_listener(tor, circid)
-    tor.add_event_listener(listener, 'STREAM')
-    for dest in dests:
-        log.debug(f'{fp} to {dest}')
-        success, ips_or_err = do_one_dest(dest, socks_addrport)
+    # Only build a circuit if we have ircd destinations to connect to.
+    if len(dests):
+        success, circid_or_err = build_gaps_circuit(
+            [None, fp], tor, good_relays)
         if not success:
-            log.warning(ips_or_err)
-            continue
-        assert not isinstance(ips_or_err, str)
-        ips.update(ips_or_err)
-    tor.remove_event_listener(listener)
-    try:
-        tor.close_circuit(circid)
-    except Exception as e:
-        log.warning(e)
+            log.warning(f'Unable to measure {fp} (1): {circid_or_err}')
+            return ips
+        circid = circid_or_err
+        log.debug(f'Will measure {fp} on {circid} {circuit_str(tor, circid)}')
+        listener = attach_stream_to_circuit_listener(tor, circid)
+        tor.add_event_listener(listener, 'STREAM')
+        for dest in dests:
+            log.debug(f'{fp} to {dest}')
+            success, ips_or_err = do_one_dest(dest, socks_addrport)
+            if not success:
+                log.warning(ips_or_err)
+                continue
+            assert not isinstance(ips_or_err, str)
+            ips.update(ips_or_err)
+        tor.remove_event_listener(listener)
+        try:
+            tor.close_circuit(circid)
+        except Exception as e:
+            log.warning(e)
     if do_dns_discovery:
         # for every IP we found, do the DNS discovery trick to see if we can
         # find any more. The copy() is so we iterate over a copy of ips and can
