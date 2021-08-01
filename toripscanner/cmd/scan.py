@@ -284,7 +284,11 @@ def measure(
     socks_addrport = get_socks_port(tor)
     assert socks_addrport
     ips: Set[str] = set()
-    descriptor = tor.get_server_descriptor(fp)
+    try:
+        descriptor = tor.get_server_descriptor(fp)
+    except Exception as e:
+        log.warning(f'No descriptor for {fp} so can\'t measure it. {e}')
+        return ips
     if not descriptor:
         log.warning(f'No descriptor for {fp} so can\'t measure it.')
         return ips
