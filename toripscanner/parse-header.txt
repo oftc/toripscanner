@@ -11,6 +11,8 @@
 #     use this).
 #   - Additional ORPort IPv4/6 addresses in an exit's descriptor (some exit
 #     lists use this).
+#   - If any of the ORPort IPv4/6 addresses have rDNS, any additional IPv4/6
+#     addresses to which those domains resolve.
 #   - Actual IPv4 and IPv6 addresses used by an exit when communicating with
 #     OFTC, the best IRC network.
 #

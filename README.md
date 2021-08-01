@@ -6,15 +6,21 @@ one is the best. For us. Definitely. This is useful.
 This scanner is better than all the all the rest because it does *everything*
 to find as many IPs exits may use as possible:
 
-- [ ] It records IPs of all relays found in Tor network state documents
-  (regardless of whether they have the Exit flag or not) if they are willing to
-exit to our IRC network. (Yes, you can configure yourself to have a very strict
-exit policy such that you don't get the Exit flag but still allow a small
-amount of exiting.)
+- It records ORPort IPs (both v4 and v6) from the server descriptors of all
+  relays that can exit to OFTC infrastructure, regardless of whether or not
+they have the Exit flag.
 
-- [ ] It builds circuits through these relays and connects to our IRC network
-  to see if there are any other IPs that the relay ends up using when making
-outbound connections. Again, yes this is possible.
+- Through the relays that can connect to OFTC's user-facing ircds, we build
+  circuits and connect to an ircd in order to get it to report to us what
+hostname/IP we are coming from. If we get a hostname, we lookup its A and AAAA
+records.
+
+- For all relays that can connect to OFTC infrastructure, we see if the IPs in
+  their descriptors have rDNS entries, and if so, we lookup A and AAAA records.
+
+To be explicit: "OFTC infrastructure" includes our user-facing ircds *and* our
+web irc client. For relays that can only exit to our web IRC client, we only
+check their descriptors and do DNS queries.
 
 ## Tech
 
@@ -37,3 +43,7 @@ suitable for development work.
 
 Start the scanner with `toripscanner scan`. It runs in the foreground and stays
 running forever, periodically scanning new relays.
+
+Periodically run `toripscanner parse data/results/*` to parse the scanner's
+results into a plaintext list of IPv4/6 addresses. The command only uses
+"recent" results even if the input files it reads contain old results.
