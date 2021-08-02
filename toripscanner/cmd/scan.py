@@ -397,6 +397,16 @@ def main(args, conf) -> None:
         except Empty:
             pass
         else:
+            # read servers.yaml again, just in case it changed while we were
+            # running
+            success, servers_or_err = get_servers(
+                conf.getpath('scan', 'servers_yaml'))
+            if not success:
+                log.error(servers_or_err)
+            else:
+                assert not isinstance(servers_or_err, str)
+                servers = servers_or_err
+            # do the scheduling
             schedule_new_relays(
                 STATE_FILE, TOR_CLIENT, servers, webclient, irc_ports)
             last_action = time.time()
