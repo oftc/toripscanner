@@ -14,6 +14,7 @@ import socket
 import ssl
 import time
 import yaml
+from .. import __version__
 from .. import tor_client as tor_client_builder
 from ..results_logger import log_result
 from ..state_file import StateFile
@@ -263,9 +264,10 @@ def hostnames_from_ip(ip: str) -> Set[str]:
 
 
 def do_one_dest(
-        dest: Tuple[str, int], socks_addrport: Tuple[str, int], use_ssl: bool)\
-        -> Tuple[bool, Union[Set[str], str]]:
+        dest: Tuple[str, int], socks_addrport: Tuple[str, int], use_ssl: bool,
+        irc_names: Tuple[str, str]) -> Tuple[bool, Union[Set[str], str]]:
     ips: Set[str] = set()
+    msg = f'USER {irc_names[0]} * * :{irc_names[1]}\nQUIT\n'
     resp = ''
     s = socks.socksocket()
     s.set_proxy(socks.SOCKS5, *socks_addrport)
@@ -275,7 +277,7 @@ def do_one_dest(
         if use_ssl:
             assert WRAP_SSL_FN
             s = WRAP_SSL_FN(s)
-        s.sendall(b'QUIT\n')
+        s.sendall(msg.encode('utf-8'))
         while True:
             new = s.recv(4096).decode('utf-8')
             if not new:
@@ -292,7 +294,8 @@ def do_one_dest(
 def measure(
         tor: Controller, fp: str, dests: Collection[Tuple[str, int]],
         do_dns_discovery: bool, good_relays: Iterable[str],
-        irc_ssl_ports: Collection[int]) -> Collection[str]:
+        irc_ssl_ports: Collection[int],
+        irc_names: Tuple[str, str]) -> Collection[str]:
     socks_addrport = get_socks_port(tor)
     assert socks_addrport
     ips: Set[str] = set()
@@ -321,7 +324,8 @@ def measure(
         for dest in dests:
             log.debug(f'{fp} to {dest}')
             use_ssl = dest[1] in irc_ssl_ports
-            success, ips_or_err = do_one_dest(dest, socks_addrport, use_ssl)
+            success, ips_or_err = do_one_dest(
+                dest, socks_addrport, use_ssl, irc_names)
             if not success:
                 log.warning(ips_or_err)
                 continue
@@ -381,6 +385,10 @@ def main(args, conf) -> None:
     irc_ssl_ports = set([int(_) for _ in conf['scan']['ssl_ports'].split(',')])
     irc_ports = set([int(_) for _ in conf['scan']['plain_ports'].split(',')]) \
         | irc_ssl_ports
+    irc_names = (
+        conf['scan']['irc_username'],
+        f"{conf['scan']['irc_realname']} v{__version__}",
+    )
     last_action = time.time()
     schedule_new_relays(STATE_FILE, TOR_CLIENT, servers, webclient, irc_ports)
     while True:
@@ -426,7 +434,8 @@ def main(args, conf) -> None:
         # only measure to the ircd dests
         ircd_dests = [d for d in dests if d[1] != webclient[1]]
         ips = measure(
-            TOR_CLIENT, relay_fp, ircd_dests, True, good_relays, irc_ssl_ports)
+            TOR_CLIENT, relay_fp, ircd_dests, True, good_relays,
+            irc_ssl_ports, irc_names)
         if ips:
             log.info(f'{relay_fp} is {ips}')
             log_result(relay_fp, time.time(), ips)
