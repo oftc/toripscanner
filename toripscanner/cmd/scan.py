@@ -142,6 +142,28 @@ def get_servers(fname: str) -> Tuple[bool, Union[dict, str]]:
     return True, out
 
 
+@lru_cache()
+def can_exit_to(
+        desc, addr: Optional[str], port: int, v6: bool) -> bool:
+    ''' Small cacheable wrapper to stem.
+
+    We expect big gains in find_reachable_servers() by checking *:port against
+    exit policies first. If the exit doesn't allow exiting to ANY host on that
+    port, then we only need to go to stem once for that exit and port. If it
+    does allow exiting to >0 host on that port, we'll actually check if any of
+    our hosts are lucky.
+
+    The cache should be cleared periodically because exit policies can change.
+
+    We always call can_exit_to() with strict=False. We expect either to have a
+    wildcard host, in which case we don't watch strict, OR we have both a host
+    and port, in which case strict is meaningless.
+    '''
+    if not v6:
+        return desc.exit_policy.can_exit_to(addr, port, strict=False)
+    return desc.exit_policy_v6.can_exit_to(addr, port, strict=False)
+
+
 def find_reachable_servers(
         desc, servers: dict, webclient: Tuple[str, int],
         ports: Collection[int]) \
@@ -171,23 +193,36 @@ def find_reachable_servers(
     if desc.exit_policy:
         # find an ircd it can exit to
         for ipv4, port in itertools.product(servers_ipv4, ports):
-            if desc.exit_policy.can_exit_to(ipv4, port):
+            # If the exit can't exit to >0 hosts on this port, stop early. This
+            # is cached by our can_exit_to() function, meaning we can avoid
+            # going to stem and repeatedly parsing exit policies for no good
+            # reason.
+            if not can_exit_to(desc, None, port, v6=False):
+                continue
+            # The desc CAN exit to the port to >0 host on the internet. Let's
+            # see if this host one of the lucky ones.
+            if can_exit_to(desc, ipv4, port, v6=False):
                 yield ipv4, port
                 break
         # see if it can exit to the web irc client
         if len(web_ipv4) and \
-                desc.exit_policy.can_exit_to(web_ipv4[0], web_port):
+                can_exit_to(desc, web_ipv4[0], web_port, v6=False):
             yield web_ipv4[0], web_port
     # has an ipv6 exit policy
     if desc.exit_policy_v6:
         # find an ircd it can exit to
         for ipv6, port in itertools.product(servers_ipv6, ports):
-            if desc.exit_policy_v6.can_exit_to(ipv6, port):
+            # See comment in ipv6 block: this is cacheable to speed up this
+            # function.
+            if not can_exit_to(desc, None, port, v6=True):
+                continue
+            # See comment in ipv4 block.
+            if can_exit_to(desc, ipv6, port, v6=True):
                 yield ipv6, port
                 break
         # see if it can exit to the web irc client
         if len(web_ipv6) and \
-                desc.exit_policy.can_exit_to(web_ipv6[0], web_port):
+                can_exit_to(desc, web_ipv6[0], web_port, v6=True):
             yield web_ipv6[0], web_port
 
 
@@ -204,6 +239,8 @@ def schedule_new_relays(
         if not len(dests):
             continue
         exits[desc.fingerprint] = dests
+    # log.debug(can_exit_to.cache_info())
+    can_exit_to.cache_clear()
     not_waiting_exits = exits.keys() - {
         item[0] for item in state.get(K_RELAY_FP_QUEUE)}
     log.info(
