@@ -49,7 +49,7 @@ setup(
     packages=find_packages(),
     include_package_data=True,
     package_data={
-        'relayscan': get_package_data(),
+        'toripscanner': get_package_data(),
     },
     # data_files=get_data_files(),
     keywords='tor measurement scanner relay exit',
