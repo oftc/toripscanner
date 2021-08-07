@@ -45,5 +45,5 @@ toripscanner -c config.ini parse \
 ln -vs "$outfile" "${symlink}.tmp"
 mv -vf "${symlink}.tmp" "${symlink}"
 
-find "$outdir" -type f -mtime +1 | xargs --no-run-if-empty gzip -v || echo $?
-find "$outdir" -type f -mtime +30 | xargs --no-run-if-empty rm -v
+find "$outdir" -type f -mtime +1 | xargs --no-run-if-empty gzip || echo $?
+find "$outdir" -type f -mtime +30 | xargs --no-run-if-empty rm
