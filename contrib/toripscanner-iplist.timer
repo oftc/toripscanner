@@ -1,0 +1,10 @@
+[Unit]
+Description=Run iplist script every hour
+
+[Timer]
+#OnCalendar=*-*-* *:28:00
+OnCalendar=hourly
+Persistent=true
+
+[Install]
+WantedBy=timers.target

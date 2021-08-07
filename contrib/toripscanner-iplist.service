@@ -1,0 +1,14 @@
+[Unit]
+Description=Output list of Tor exit IPs to a file
+After=network.target
+
+[Service]
+User=toripscanner
+Group=toripscanner
+WorkingDirectory=/home/toripscanner
+[Service]
+Environment=PATH=/home/toripscanner/.local/bin:/usr/local/bin:/usr/bin:/bin:/usr/local/games:/usr/games
+ExecStart=/home/toripscanner/src/toripscanner/contrib/iplist-rotate.sh /ssd-storage/toripscanner/data-scan/results /var/www/demos.traudt.xyz/exits
+
+[Install]
+WantedBy=multi-user.target
