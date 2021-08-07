@@ -1,0 +1,12 @@
+[Unit]
+Description=Scan the Tor network for exit IPs
+After=network.target
+
+[Service]
+User=toripscanner
+Group=toripscanner
+WorkingDirectory=/home/toripscanner
+ExecStart=/home/toripscanner/.local/bin/toripscanner -c config.ini scan
+
+[Install]
+WantedBy=multi-user.target
