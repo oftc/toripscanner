@@ -179,6 +179,8 @@ def find_reachable_servers(
     - 4: the relay can reach an ircd on ipv4, on ipv6, and can reach the web
     client on both ipv4 and ipv6.
     '''
+    ports = [_ for _ in ports]  # set to list
+    random.shuffle(ports)
     servers_ipv4 = [s[0] for s in servers.values() if s[0] is not None]
     servers_ipv6 = [s[1] for s in servers.values() if s[1] is not None]
     random.shuffle(servers_ipv4)
