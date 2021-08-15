@@ -118,6 +118,7 @@ def main(args, conf) -> None:
     ]
     results_agg = aggregate(results)
     ips = unique_ips(results_agg)
+    ips -= {'127.0.0.1', '::1'}
     num_ipv4 = len([ip for ip in ips if ':' not in ip])
     num_ipv6 = len([ip for ip in ips if ':' in ip])
     assert num_ipv4 + num_ipv6 == len(ips)
